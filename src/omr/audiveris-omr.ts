@@ -42,6 +42,8 @@ const DEFAULT_AUDIVERIS_PATHS = [
   'C:\\Program Files\\Audiveris\\Audiveris.exe',
   '/opt/audiveris/bin/Audiveris',
   '/usr/local/bin/audiveris',
+  '/usr/bin/audiveris',
+  '/opt/audiveris/Audiveris',
 ];
 
 /**

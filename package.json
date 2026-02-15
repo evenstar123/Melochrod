@@ -14,8 +14,10 @@
     "precompute-embeddings": "tsx scripts/precompute-embeddings.ts"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.95.3",
     "@types/express": "^5.0.6",
     "@types/multer": "^2.0.0",
+    "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "fast-xml-parser": "^4.5.1",
@@ -29,6 +31,7 @@
     "verovio": "^6.0.1"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
     "@types/pdfkit": "^0.17.5",
     "fast-check": "^4.5.3",
     "tsup": "^8.3.5",

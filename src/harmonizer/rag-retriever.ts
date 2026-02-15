@@ -3,6 +3,10 @@
  *
  * 使用 text-embedding-v4 (DashScope) 将旋律特征向量化
  * 从 Hooktheory 片段库中检索最相似的和弦进行
+ *
+ * 支持按 mode 分片加载（lazy loading），大幅降低内存占用：
+ *   - 全量加载：~550MB 常驻
+ *   - 分片加载：最大 ~270MB（major 分片），按需加载
  */
 
 import OpenAI from 'openai';
@@ -69,14 +73,36 @@ function phraseToText(phrase: PhraseEntry): string {
 /** Embedding 维度（text-embedding-v4） */
 const EMBEDDING_DIM = 1024;
 
+/** 单个 mode 分片的数据 */
+interface ModeShard {
+  mode: string;
+  phrases: PhraseEntry[];
+  embeddingBuffer: Float32Array | null;
+  /** JSON 模式的 embeddings（回退用） */
+  phraseEmbeddings: number[][];
+}
+
 export class RAGRetriever {
   private client: OpenAI;
-  private phrases: PhraseEntry[] = [];
-  private phraseEmbeddings: number[][] = [];
-  /** 二进制模式：用 Float32Array 存储，避免 number[][] 的 GC 压力 */
-  private embeddingBuffer: Float32Array | null = null;
   private topK: number;
   private initialized = false;
+  private dataDir = '';
+
+  /**
+   * 加载策略：
+   *   'sharded'  — 按 mode 分片，按需加载（推荐，省内存）
+   *   'monolith' — 全量加载到内存（旧模式，兼容）
+   *   'fallback' — 无预计算 embedding，实时 embed（极慢）
+   */
+  private loadStrategy: 'sharded' | 'monolith' | 'fallback' = 'fallback';
+
+  /** 分片模式：当前加载的 shard（LRU = 1，只保留最近使用的 mode） */
+  private currentShard: ModeShard | null = null;
+
+  /** 全量模式（旧兼容）的数据 */
+  private allPhrases: PhraseEntry[] = [];
+  private allEmbeddingBuffer: Float32Array | null = null;
+  private allPhraseEmbeddings: number[][] = [];
 
   constructor(config: RAGConfig) {
     this.client = new OpenAI({
@@ -90,27 +116,39 @@ export class RAGRetriever {
    * 加载片段数据和预计算的 embedding
    *
    * 加载优先级:
-   *   1. 二进制格式: phrase_meta.json + phrase_embeddings.bin（最快，推荐）
-   *   2. JSON 格式:  phrase_embeddings.json（2.7GB，可能因 V8 字符串限制失败）
-   *   3. 无 embedding: hooktheory_phrases.json（回退，检索时实时 embed，极慢）
+   *   1. 分片二进制: phrase_meta_{mode}.json + phrase_embeddings_{mode}.bin（最省内存）
+   *   2. 全量二进制: phrase_meta.json + phrase_embeddings.bin（兼容旧格式）
+   *   3. JSON 格式:  phrase_embeddings.json（2.7GB，可能因 V8 字符串限制失败）
+   *   4. 无 embedding: hooktheory_phrases.json（回退，检索时实时 embed，极慢）
    */
   loadPhrases(phrasesPath: string): void {
-    const dataDir = phrasesPath.replace(/[/\\][^/\\]+$/, '');
+    this.dataDir = phrasesPath.replace(/[/\\][^/\\]+$/, '');
 
-    // 1. 尝试二进制格式（phrase_meta.json + phrase_embeddings.bin）
-    const metaPath = `${dataDir}/phrase_meta.json`;
-    const binPath = `${dataDir}/phrase_embeddings.bin`;
+    // 1. 检查分片文件是否存在（至少有 major 分片）
+    const shardMetaPath = `${this.dataDir}/phrase_meta_major.json`;
+    const shardBinPath = `${this.dataDir}/phrase_embeddings_major.bin`;
+    if (existsSync(shardMetaPath) && existsSync(shardBinPath)) {
+      this.loadStrategy = 'sharded';
+      console.log('Mode-sharded embeddings detected, will load on demand (lazy)');
+      this.initialized = true;
+      return;
+    }
+
+    // 2. 尝试全量二进制格式（phrase_meta.json + phrase_embeddings.bin）
+    const metaPath = `${this.dataDir}/phrase_meta.json`;
+    const binPath = `${this.dataDir}/phrase_embeddings.bin`;
     if (existsSync(metaPath) && existsSync(binPath)) {
       try {
         const t0 = Date.now();
-        this.phrases = JSON.parse(readFileSync(metaPath, 'utf-8'));
+        this.allPhrases = JSON.parse(readFileSync(metaPath, 'utf-8'));
         const binBuf = readFileSync(binPath);
-        this.embeddingBuffer = new Float32Array(
+        this.allEmbeddingBuffer = new Float32Array(
           binBuf.buffer, binBuf.byteOffset, binBuf.byteLength / 4
         );
-        this.phraseEmbeddings = []; // 不再使用 number[][]
+        this.allPhraseEmbeddings = [];
+        this.loadStrategy = 'monolith';
         const loadMs = Date.now() - t0;
-        console.log(`Loaded ${this.phrases.length} phrases with binary embeddings (${loadMs}ms)`);
+        console.log(`Loaded ${this.allPhrases.length} phrases with binary embeddings (${loadMs}ms)`);
         this.initialized = true;
         return;
       } catch (err) {
@@ -118,16 +156,17 @@ export class RAGRetriever {
       }
     }
 
-    // 2. 尝试 JSON 格式（phrase_embeddings.json）
+    // 3. 尝试 JSON 格式（phrase_embeddings.json）
     const embeddingsPath = phrasesPath.replace('hooktheory_phrases.json', 'phrase_embeddings.json');
     if (existsSync(embeddingsPath)) {
       try {
         const raw = readFileSync(embeddingsPath, 'utf-8');
         const data = JSON.parse(raw);
-        this.phrases = data.phrases;
-        this.phraseEmbeddings = data.embeddings;
-        this.embeddingBuffer = null;
-        console.log(`Loaded ${this.phrases.length} phrases with precomputed embeddings (JSON)`);
+        this.allPhrases = data.phrases;
+        this.allPhraseEmbeddings = data.embeddings;
+        this.allEmbeddingBuffer = null;
+        this.loadStrategy = 'monolith';
+        console.log(`Loaded ${this.allPhrases.length} phrases with precomputed embeddings (JSON)`);
         this.initialized = true;
         return;
       } catch (err) {
@@ -135,93 +174,84 @@ export class RAGRetriever {
       }
     }
 
-    // 3. 回退：加载纯片段数据（检索时需要实时 embed 候选片段）
+    // 4. 回退：加载纯片段数据（检索时需要实时 embed 候选片段）
     const raw = readFileSync(phrasesPath, 'utf-8');
     const allPhrases: PhraseEntry[] = JSON.parse(raw);
-    this.phrases = allPhrases.filter(
+    this.allPhrases = allPhrases.filter(
       p => p.chord_sequence.length > 0 && p.melody_intervals.length > 0
     );
-    this.phraseEmbeddings = [];
-    this.embeddingBuffer = null;
-    console.log(`Loaded ${this.phrases.length} phrases (no precomputed embeddings, will embed on-the-fly)`);
+    this.allPhraseEmbeddings = [];
+    this.allEmbeddingBuffer = null;
+    this.loadStrategy = 'fallback';
+    console.log(`Loaded ${this.allPhrases.length} phrases (no precomputed embeddings, will embed on-the-fly)`);
     this.initialized = true;
   }
 
   /**
-   * 判断是否有预计算 embedding 可用
+   * 按需加载指定 mode 的分片数据
    */
-  private hasPrecomputedEmbeddings(): boolean {
-    return this.embeddingBuffer !== null || this.phraseEmbeddings.length > 0;
-  }
-
-  /**
-   * 获取第 i 条 phrase 的 embedding（从 buffer 或 number[][] 中读取）
-   */
-  private getEmbeddingAt(i: number): number[] {
-    if (this.embeddingBuffer) {
-      const offset = i * EMBEDDING_DIM;
-      // Float32Array.slice 返回新的 Float32Array，转为普通数组
-      return Array.from(this.embeddingBuffer.subarray(offset, offset + EMBEDDING_DIM));
+  private loadModeShard(mode: string): ModeShard {
+    // 已缓存则直接返回
+    if (this.currentShard?.mode === mode) {
+      return this.currentShard;
     }
-    return this.phraseEmbeddings[i];
+
+    const metaPath = `${this.dataDir}/phrase_meta_${mode}.json`;
+    const binPath = `${this.dataDir}/phrase_embeddings_${mode}.bin`;
+
+    if (!existsSync(metaPath) || !existsSync(binPath)) {
+      // 该 mode 没有分片文件，返回空分片
+      console.warn(`No shard found for mode "${mode}", returning empty`);
+      const empty: ModeShard = { mode, phrases: [], embeddingBuffer: null, phraseEmbeddings: [] };
+      this.currentShard = empty;
+      return empty;
+    }
+
+    const t0 = Date.now();
+
+    // 释放旧分片（让 GC 回收）
+    if (this.currentShard) {
+      console.log(`Unloading shard "${this.currentShard.mode}"`);
+      this.currentShard.embeddingBuffer = null;
+      this.currentShard.phrases = [];
+      this.currentShard = null;
+    }
+
+    const phrases: PhraseEntry[] = JSON.parse(readFileSync(metaPath, 'utf-8'));
+    const binBuf = readFileSync(binPath);
+    const embeddingBuffer = new Float32Array(
+      binBuf.buffer, binBuf.byteOffset, binBuf.byteLength / 4
+    );
+
+    const shard: ModeShard = { mode, phrases, embeddingBuffer, phraseEmbeddings: [] };
+    this.currentShard = shard;
+
+    const loadMs = Date.now() - t0;
+    const sizeMB = (binBuf.byteLength / 1024 / 1024).toFixed(1);
+    console.log(`Loaded shard "${mode}": ${phrases.length} phrases, ${sizeMB} MB (${loadMs}ms)`);
+
+    return shard;
   }
 
   /**
    * 用 Float32Array 直接计算余弦相似度（避免创建中间数组）
    */
-  private cosineSimilarityWithBuffer(queryEmb: number[], phraseIndex: number): number {
-    if (this.embeddingBuffer) {
-      const offset = phraseIndex * EMBEDDING_DIM;
-      let dot = 0, normA = 0, normB = 0;
-      for (let i = 0; i < EMBEDDING_DIM; i++) {
-        const a = queryEmb[i];
-        const b = this.embeddingBuffer[offset + i];
-        dot += a * b;
-        normA += a * a;
-        normB += b * b;
-      }
-      const denom = Math.sqrt(normA) * Math.sqrt(normB);
-      return denom === 0 ? 0 : dot / denom;
+  private cosineSimilarityWithBuffer(
+    queryEmb: number[],
+    buffer: Float32Array,
+    phraseIndex: number,
+  ): number {
+    const offset = phraseIndex * EMBEDDING_DIM;
+    let dot = 0, normA = 0, normB = 0;
+    for (let i = 0; i < EMBEDDING_DIM; i++) {
+      const a = queryEmb[i];
+      const b = buffer[offset + i];
+      dot += a * b;
+      normA += a * a;
+      normB += b * b;
     }
-    return -1; // 不可用，调用方应回退到普通 cosineSimilarity
-  }
-
-  /**
-   * 按模式和音程模式做快速预筛选
-   */
-  private preFilter(query: string, mode: string, maxCandidates: number = 200): { indices: number[]; phrases: PhraseEntry[]; embeddings: number[][] } {
-    // 先按调式过滤
-    const indices: number[] = [];
-    for (let i = 0; i < this.phrases.length; i++) {
-      if (this.phrases[i].mode === mode) {
-        indices.push(i);
-      }
-    }
-
-    let filtered = indices;
-
-    // 如果候选太多且没有预计算 embedding，按旋律长度粗筛
-    if (filtered.length > maxCandidates && !this.hasPrecomputedEmbeddings()) {
-      const intervalMatch = query.match(/intervals:\[([^\]]*)\]/);
-      const queryIntervalCount = intervalMatch
-        ? intervalMatch[1].split(',').filter(s => s.length > 0).length
-        : 0;
-
-      filtered.sort((a, b) => {
-        const diffA = Math.abs(this.phrases[a].melody_intervals.length - queryIntervalCount);
-        const diffB = Math.abs(this.phrases[b].melody_intervals.length - queryIntervalCount);
-        return diffA - diffB;
-      });
-      filtered = filtered.slice(0, maxCandidates);
-    }
-
-    return {
-      indices: filtered,
-      phrases: filtered.map(i => this.phrases[i]),
-      embeddings: this.phraseEmbeddings.length > 0
-        ? filtered.map(i => this.phraseEmbeddings[i])
-        : [],
-    };
+    const denom = Math.sqrt(normA) * Math.sqrt(normB);
+    return denom === 0 ? 0 : dot / denom;
   }
 
   /**
@@ -258,51 +288,99 @@ export class RAGRetriever {
 
   /**
    * 检索最相似的和弦进行片段
-   *
-   * 如果有预计算 embedding，只需 embed 查询文本（1 次 API 调用）
-   * 否则回退到实时 embed 候选片段（多次 API 调用）
    */
   async retrieve(query: string, mode: string): Promise<RetrievalResult[]> {
     if (!this.initialized) {
       throw new Error('RAGRetriever not initialized. Call loadPhrases() first.');
     }
 
-    // 1. 预筛选
-    const { indices, phrases: candidates, embeddings: candidateEmbeddings } = this.preFilter(query, mode);
-    if (candidates.length === 0) {
-      return [];
+    if (this.loadStrategy === 'sharded') {
+      return this.retrieveSharded(query, mode);
     }
+    return this.retrieveMonolith(query, mode);
+  }
 
-    // 2. 获取查询嵌入（始终只需 1 次 API 调用）
+  /**
+   * 分片模式检索：加载对应 mode 的分片，全量余弦相似度
+   */
+  private async retrieveSharded(query: string, mode: string): Promise<RetrievalResult[]> {
+    const shard = this.loadModeShard(mode);
+    if (shard.phrases.length === 0) return [];
+
+    // 1 次 API 调用获取查询 embedding
     const queryEmbedding = await this.getEmbedding(query);
 
-    // 3. 计算相似度
+    // 分片内所有数据都是同一 mode，无需过滤，直接全量计算
+    const results: RetrievalResult[] = shard.phrases.map((phrase, i) => ({
+      phrase,
+      similarity: shard.embeddingBuffer
+        ? this.cosineSimilarityWithBuffer(queryEmbedding, shard.embeddingBuffer, i)
+        : cosineSimilarity(queryEmbedding, shard.phraseEmbeddings[i]),
+    }));
+
+    results.sort((a, b) => b.similarity - a.similarity);
+    return results.slice(0, this.topK);
+  }
+
+  /**
+   * 全量模式检索（旧兼容 + fallback）
+   */
+  private async retrieveMonolith(query: string, mode: string): Promise<RetrievalResult[]> {
+    // 按 mode 过滤
+    const indices: number[] = [];
+    for (let i = 0; i < this.allPhrases.length; i++) {
+      if (this.allPhrases[i].mode === mode) {
+        indices.push(i);
+      }
+    }
+    if (indices.length === 0) return [];
+
+    const candidates = indices.map(i => this.allPhrases[i]);
+    const hasEmbeddings = this.allEmbeddingBuffer !== null || this.allPhraseEmbeddings.length > 0;
+
+    // fallback 模式：候选太多时按旋律长度粗筛
+    let filteredIndices = indices;
+    if (!hasEmbeddings && filteredIndices.length > 200) {
+      const intervalMatch = query.match(/intervals:\[([^\]]*)\]/);
+      const queryIntervalCount = intervalMatch
+        ? intervalMatch[1].split(',').filter(s => s.length > 0).length
+        : 0;
+      filteredIndices.sort((a, b) => {
+        const diffA = Math.abs(this.allPhrases[a].melody_intervals.length - queryIntervalCount);
+        const diffB = Math.abs(this.allPhrases[b].melody_intervals.length - queryIntervalCount);
+        return diffA - diffB;
+      });
+      filteredIndices = filteredIndices.slice(0, 200);
+    }
+
+    const filteredCandidates = filteredIndices.map(i => this.allPhrases[i]);
+
+    // 获取查询 embedding
+    const queryEmbedding = await this.getEmbedding(query);
+
     let results: RetrievalResult[];
 
-    if (this.embeddingBuffer) {
-      // 二进制模式：直接从 Float32Array 计算，零额外内存分配
-      results = candidates.map((phrase, i) => ({
+    if (this.allEmbeddingBuffer) {
+      results = filteredCandidates.map((phrase, i) => ({
         phrase,
-        similarity: this.cosineSimilarityWithBuffer(queryEmbedding, indices[i]),
+        similarity: this.cosineSimilarityWithBuffer(queryEmbedding, this.allEmbeddingBuffer!, filteredIndices[i]),
       }));
-    } else if (candidateEmbeddings.length > 0) {
-      // JSON 预计算模式
-      results = candidates.map((phrase, i) => ({
+    } else if (this.allPhraseEmbeddings.length > 0) {
+      results = filteredCandidates.map((phrase, i) => ({
         phrase,
-        similarity: cosineSimilarity(queryEmbedding, candidateEmbeddings[i]),
+        similarity: cosineSimilarity(queryEmbedding, this.allPhraseEmbeddings[filteredIndices[i]]),
       }));
     } else {
-      // 回退：实时 embed 候选片段
-      const candidateTexts = candidates.map(phraseToText);
+      // 实时 embed
+      const candidateTexts = filteredCandidates.map(phraseToText);
       const finalEmbeddings = await this.getEmbeddings(candidateTexts);
-      results = candidates.map((phrase, i) => ({
+      results = filteredCandidates.map((phrase, i) => ({
         phrase,
         similarity: cosineSimilarity(queryEmbedding, finalEmbeddings[i]),
       }));
     }
 
     results.sort((a, b) => b.similarity - a.similarity);
-
     return results.slice(0, this.topK);
   }
 
@@ -321,4 +399,3 @@ export class RAGRetriever {
     return results;
   }
 }
-
