@@ -143,12 +143,13 @@ app.post('/api/export/abc', (req, res) => {
 // POST /api/export/png  — Score + MusicXML → PNG 图片
 app.post('/api/export/png', async (req, res) => {
   const { score, musicxml } = req.body;
-  if (!score || !musicxml) {
-    return res.status(400).json({ error: '缺少 score 或 musicxml 参数' });
+  if (!musicxml) {
+    return res.status(400).json({ error: '缺少 musicxml 参数' });
   }
   try {
-    const enriched = injectChordsToMusicXML(musicxml, score);
-    const pngBuf = await musicxmlToPNG(enriched);
+    // 如果提供了 score，先注入和弦；否则直接渲染（musicxml 已含和弦）
+    const finalXml = score ? injectChordsToMusicXML(musicxml, score) : musicxml;
+    const pngBuf = await musicxmlToPNG(finalXml);
     res.set('Content-Type', 'image/png');
     res.set('Content-Disposition', 'attachment; filename="score.png"');
     return res.send(pngBuf);
@@ -161,12 +162,12 @@ app.post('/api/export/png', async (req, res) => {
 // POST /api/export/pdf  — Score + MusicXML → PDF 文件
 app.post('/api/export/pdf', async (req, res) => {
   const { score, musicxml } = req.body;
-  if (!score || !musicxml) {
-    return res.status(400).json({ error: '缺少 score 或 musicxml 参数' });
+  if (!musicxml) {
+    return res.status(400).json({ error: '缺少 musicxml 参数' });
   }
   try {
-    const enriched = injectChordsToMusicXML(musicxml, score);
-    const pdfBuf = await musicxmlToPDF(enriched);
+    const finalXml = score ? injectChordsToMusicXML(musicxml, score) : musicxml;
+    const pdfBuf = await musicxmlToPDF(finalXml);
     res.set('Content-Type', 'application/pdf');
     res.set('Content-Disposition', 'attachment; filename="score.pdf"');
     return res.send(pdfBuf);
