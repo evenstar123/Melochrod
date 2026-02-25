@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "1dd84cb3-4c09-4e9d-9164-7820fd9e8b5b"
+      }
+    },
+    "android": {
+      "package": "playcom.melochord.app"
+    }
+  }
+}

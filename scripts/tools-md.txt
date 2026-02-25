@@ -1,0 +1,40 @@
+# TOOLS.md - Local Notes
+
+## Web Search (联网搜索)
+
+你有联网搜索能力！用 shell 工具执行 curl 来搜索：
+
+### 百度搜索（推荐，国内直连快）
+```bash
+curl -s 'https://www.baidu.com/s?wd=搜索关键词' | head -c 5000
+```
+
+### Bing 搜索
+```bash
+curl -s 'https://cn.bing.com/search?q=keyword' | head -c 5000
+```
+
+### DuckDuckGo（需要代理，已配置）
+```bash
+curl -s 'https://duckduckgo.com/html/?q=keyword' | head -c 5000
+```
+
+### 搜狗搜索
+```bash
+curl -s 'https://sogou.com/web?query=keyword' | head -c 5000
+```
+
+也可以用 browser 工具打开网页获取更完整的内容。
+参考 skills/multi-search-engine/SKILL.md 获取完整的17个搜索引擎列表和高级搜索语法。
+
+## SSH
+- China server: 127.0.0.1 (localhost, this machine)
+- Singapore server: 152.42.255.180 (proxy exit node)
+
+## Key Manager
+- Status: curl http://127.0.0.1:9876/admin/status
+- Health: curl http://127.0.0.1:9876/health
+- 只允许5个模型: DeepSeek-V3.2, GLM-4.6V, Kimi-K2-Thinking, MiniMax-M2.5, Qwen3-VL-235B-A22B-Thinking
+
+## Email
+- QQ Mail: 2111276304@qq.com (himalaya configured)
