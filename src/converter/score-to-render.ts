@@ -9,8 +9,10 @@
  *   enrichedXml → verovio → SVG(per page) → sharp(PNG) → pdfkit → PDF
  */
 
-// @ts-ignore — verovio 没有类型定义
-import verovio from 'verovio';
+// @ts-ignore — verovio ESM + WASM 模块
+import createVerovioModule from 'verovio/wasm';
+// @ts-ignore
+import { VerovioToolkit } from 'verovio/esm';
 import sharp from 'sharp';
 
 /** 渲染选项 */
@@ -34,16 +36,9 @@ let cachedToolkit: any = null;
 
 async function getToolkit(): Promise<any> {
   if (cachedToolkit) return cachedToolkit;
-  return new Promise<any>((resolve, reject) => {
-    verovio.module.onRuntimeInitialized = () => {
-      try {
-        cachedToolkit = new verovio.toolkit();
-        resolve(cachedToolkit);
-      } catch (err) {
-        reject(err);
-      }
-    };
-  });
+  const VerovioModule = await createVerovioModule();
+  cachedToolkit = new VerovioToolkit(VerovioModule);
+  return cachedToolkit;
 }
 
 /**
