@@ -21,6 +21,7 @@ Thumbs.db
 
 # IDE
 .vscode/
+.kiro/
 
 # Logs
 *.log
