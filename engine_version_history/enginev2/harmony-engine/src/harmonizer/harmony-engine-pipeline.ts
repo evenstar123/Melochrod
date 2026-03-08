@@ -9,7 +9,7 @@ import { FunctionalStateTracker } from './functional-state-tracker.js';
 import { CandidateLatticeGenerator } from '../candidate/candidate-lattice-generator.js';
 import { GlobalDecoder } from '../decoder/global-decoder.js';
 import { ThreeLayerRepairer } from '../repair/three-layer-repairer.js';
-import { measure_start_time } from '../core/music-time.js';
+import { measure_start_time, total_duration } from '../core/music-time.js';
 import { RepeatPhraseAnalyzer } from './repeat-phrase-analyzer.js';
 import { HarmonyCache, type HarmonyCacheConfig } from '../perf/harmony-cache.js';
 import { ConfidenceCalibrator, type ConfidenceOutput } from './confidence-calibrator.js';
@@ -51,6 +51,7 @@ export interface HarmonyEnginePipelineConfig {
   // Internal optional fields for integration entrypoints.
   input_type?: HarmonyEngineInput['type'];
   original_musicxml?: string;
+  onProgress?: (data: { stage: string; message: string; current: number; total: number }) => void;
 }
 
 export interface StageTiming {
@@ -162,7 +163,6 @@ function parse_key(key: string): { root: ChordCandidate['root']; accidental: Cho
 export class HarmonyEnginePipeline {
   private readonly note_salience_analyzer = new NoteSalienceAnalyzer();
   private readonly phrase_segmentation = new PhraseSegmentationModule();
-  private readonly key_sequence_analyzer = new KeySequenceAnalyzer();
   private readonly harmonic_rhythm_predictor = new HarmonicRhythmPredictor();
   private readonly functional_state_tracker = new FunctionalStateTracker();
   private readonly lattice_generator = new CandidateLatticeGenerator();
@@ -281,10 +281,12 @@ export class HarmonyEnginePipeline {
     const errors: string[] = [];
 
     const tSalience = Date.now();
+    config.onProgress?.({ stage: 'SALIENCE', message: '分析音符显著性...', current: 1, total: 10 });
     this.note_salience_analyzer.analyze(score);
     stageTiming.note_salience_ms = Date.now() - tSalience;
 
     const tPhrase = Date.now();
+    config.onProgress?.({ stage: 'PHRASE', message: '划分乐句结构...', current: 2, total: 10 });
     const phraseBoundaries = this.phrase_segmentation.segment(score, 0);
     this.note_salience_analyzer.analyze(score, phraseBoundaries);
     stageTiming.phrase_segmentation_ms = Date.now() - tPhrase;
@@ -292,12 +294,13 @@ export class HarmonyEnginePipeline {
     const scoreFingerprint = this.score_fingerprint(score);
 
     const tKey = Date.now();
+    config.onProgress?.({ stage: 'KEY', message: '读取谱面调号...', current: 3, total: 10 });
     const keySequenceCacheKey = this.cache.generate_melody_cache_key({
       stage: 'key_sequence',
       score: scoreFingerprint,
     });
     const cachedKeySequence = this.cache.get_melody_result<ReturnType<KeySequenceAnalyzer['analyze']>>(keySequenceCacheKey);
-    let keySequence = cachedKeySequence ?? this.key_sequence_analyzer.analyze(score);
+    let keySequence = cachedKeySequence ?? this.build_key_sequence_from_score(score);
     if (!cachedKeySequence) {
       this.cache.set_melody_result(keySequenceCacheKey, keySequence);
     }
@@ -309,6 +312,7 @@ export class HarmonyEnginePipeline {
     stageTiming.key_sequence_ms = Date.now() - tKey;
 
     const tRhythm = Date.now();
+    config.onProgress?.({ stage: 'RHYTHM', message: '预测和声节奏...', current: 4, total: 10 });
     const rhythmCacheKey = this.cache.generate_melody_cache_key({
       stage: 'harmonic_rhythm',
       score: scoreFingerprint,
@@ -329,6 +333,7 @@ export class HarmonyEnginePipeline {
     stageTiming.rhythm_ms = Date.now() - tRhythm;
 
     const tState = Date.now();
+    config.onProgress?.({ stage: 'FUNCTIONAL', message: '追踪功能进行状态...', current: 5, total: 10 });
     const stateContexts = keySequence.map((entry) => ({
       start_time: entry.start_time,
       end_time: entry.end_time,
@@ -340,6 +345,7 @@ export class HarmonyEnginePipeline {
     stageTiming.state_tracking_ms = Date.now() - tState;
 
     const tLattice = Date.now();
+    config.onProgress?.({ stage: 'LATTICE', message: '生成三路候选网格...', current: 6, total: 10 });
     let lattice: CandidateLattice;
     try {
       const latticeCacheKey = this.cache.generate_melody_cache_key({
@@ -378,6 +384,7 @@ export class HarmonyEnginePipeline {
     this.apply_preferences(lattice, config.user_profile, config.institution_profile, config.user_previous_chord);
 
     const tDecode = Date.now();
+    config.onProgress?.({ stage: 'DECODE', message: '全局最优路径解码...', current: 7, total: 10 });
     const baseContext = {
       key_sequence: keySequence.map((entry) => ({
         key: entry.key,
@@ -416,6 +423,7 @@ export class HarmonyEnginePipeline {
     stageTiming.decode_ms = Date.now() - tDecode;
 
     const tRepair = Date.now();
+    config.onProgress?.({ stage: 'REPAIR', message: '多层逻辑修复优化...', current: 8, total: 10 });
     const repaired = this.repairer.repair(decoded.chord_sequence, lattice, phraseBoundaries);
     this.write_to_score(score, repaired.chord_sequence, timeSpans);
     stageTiming.repair_ms = Date.now() - tRepair;
@@ -433,6 +441,7 @@ export class HarmonyEnginePipeline {
     });
 
     const tExplanation = Date.now();
+    config.onProgress?.({ stage: 'EXPLANATION', message: '生成和声解释...', current: 9, total: 10 });
     const explanations: Explanation[] = [];
     if (config.generate_explanations !== false) {
       for (let spanIndex = 0; spanIndex < repaired.chord_sequence.length; spanIndex++) {
@@ -455,6 +464,7 @@ export class HarmonyEnginePipeline {
     stageTiming.explanation_ms = Date.now() - tExplanation;
 
     const tOutput = Date.now();
+    config.onProgress?.({ stage: 'OUTPUT', message: '生成结果数据...', current: 10, total: 10 });
     let annotatedMusicXml: string | undefined;
     if (config.original_musicxml) {
       try {
@@ -596,6 +606,57 @@ export class HarmonyEnginePipeline {
       }, 0.6);
     }
     return lattice;
+  }
+
+  private build_key_sequence_from_score(score: Score): ReturnType<KeySequenceAnalyzer['analyze']> {
+    if (score.measures.length === 0) {
+      return [];
+    }
+
+    const sequence: ReturnType<KeySequenceAnalyzer['analyze']> = [];
+    let currentKey = score.key;
+    let segmentStart = 0;
+
+    for (const measure of score.measures) {
+      if (!measure.keyChange) {
+        continue;
+      }
+
+      const changeTime = measure_start_time(score, measure.number);
+      if (changeTime > segmentStart + 1e-6) {
+        sequence.push({
+          key: this.key_label(currentKey),
+          mode: this.mode_config.map_to_supported_mode(currentKey.mode),
+          confidence: 0.95,
+          start_time: segmentStart,
+          end_time: changeTime,
+        });
+      }
+
+      currentKey = measure.keyChange;
+      segmentStart = changeTime;
+    }
+
+    const endTime = total_duration(score);
+    if (endTime > segmentStart + 1e-6 || sequence.length === 0) {
+      sequence.push({
+        key: this.key_label(currentKey),
+        mode: this.mode_config.map_to_supported_mode(currentKey.mode),
+        confidence: 0.95,
+        start_time: segmentStart,
+        end_time: endTime,
+      });
+    }
+
+    return sequence;
+  }
+
+  private key_label(key: Score['key']): string {
+    const accidental =
+      key.tonicAccidental === 'sharp' ? '#' :
+      key.tonicAccidental === 'flat' ? 'b' :
+      '';
+    return `${key.tonic}${accidental}`;
   }
 
   private partial_result(input: {

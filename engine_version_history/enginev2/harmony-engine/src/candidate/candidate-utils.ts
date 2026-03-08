@@ -61,6 +61,30 @@ export function note_name_from_pc(pc: number, preferSharps: boolean): { step: No
   return (preferSharps ? SHARP_NAMES : FLAT_NAMES)[index];
 }
 
+function tonic_label(tonic: NoteLetter, accidental: Accidental): string {
+  const acc = accidental === 'sharp' ? '#' : accidental === 'flat' ? 'b' : '';
+  return `${tonic}${acc}`;
+}
+
+function key_prefers_sharps(tonic: NoteLetter, accidental: Accidental, mode: SupportedMode): boolean {
+  const label = tonic_label(tonic, accidental);
+
+  const flatMajorKeys = new Set(['F', 'Bb', 'Eb', 'Ab', 'Db', 'Gb', 'Cb']);
+  const flatMinorKeys = new Set(['D', 'G', 'C', 'F', 'Bb', 'Eb', 'Ab']);
+  const sharpMajorKeys = new Set(['G', 'D', 'A', 'E', 'B', 'F#', 'C#']);
+  const sharpMinorKeys = new Set(['E', 'B', 'F#', 'C#', 'G#', 'D#', 'A#']);
+
+  if (mode === 'major') {
+    if (flatMajorKeys.has(label)) return false;
+    if (sharpMajorKeys.has(label)) return true;
+    return accidental === 'sharp';
+  }
+
+  if (flatMinorKeys.has(label)) return false;
+  if (sharpMinorKeys.has(label)) return true;
+  return accidental === 'sharp';
+}
+
 export function roman_to_degree(romanNumeral: string): number | null {
   const normalized = romanNumeral
     .replace(/^[b#]+/, '')
@@ -131,7 +155,7 @@ export function candidate_from_roman(params: {
   const tonicPc = key_tonic_pc(params.tonic, params.tonic_accidental);
   const pc = tonicPc + scale[degree - 1];
 
-  const preferSharps = params.tonic_accidental !== 'flat';
+  const preferSharps = key_prefers_sharps(params.tonic, params.tonic_accidental, params.mode);
   const noteName = note_name_from_pc(pc, preferSharps);
   const quality = roman_to_quality(params.roman_numeral);
 

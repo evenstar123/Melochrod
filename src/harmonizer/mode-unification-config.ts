@@ -1,4 +1,4 @@
-import type { SupportedMode } from '../core/harmony-types.js';
+export type SupportedMode = 'major' | 'minor' | 'mixolydian' | 'lydian' | 'phrygian' | 'dorian';
 
 function normalize_pc(pc: number): number {
   return ((pc % 12) + 12) % 12;
@@ -78,4 +78,3 @@ export class ModeUnificationConfig {
     return bestMode;
   }
 }
-

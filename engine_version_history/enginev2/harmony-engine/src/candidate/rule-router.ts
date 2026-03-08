@@ -33,7 +33,17 @@ function melody_coverage(candidate: ChordCandidate, notePcs: number[]): number {
   return covered / notePcs.length;
 }
 
-function candidates_for_difficulty(difficulty: string): string[] {
+function candidates_for_difficulty(difficulty: string, mode: string): string[] {
+  if (mode === 'minor') {
+    if (difficulty === 'basic') {
+      return ['i', 'iv', 'V', 'VI'];
+    }
+    if (difficulty === 'advanced') {
+      return ['i', 'iio', 'III', 'iv', 'V', 'VI', 'VII', 'V7', 'iv7', 'VImaj7'];
+    }
+    return ['i', 'iio', 'III', 'iv', 'V', 'VI', 'VII', 'V7'];
+  }
+
   if (difficulty === 'basic') {
     return ['I', 'IV', 'V', 'vi'];
   }
@@ -81,7 +91,7 @@ export class RuleRouter {
 
     const notePcs = strongNotePcs.length > 0 ? strongNotePcs : fallbackNotePcs;
 
-    const romans = new Set(candidates_for_difficulty(context.difficulty));
+    const romans = new Set(candidates_for_difficulty(context.difficulty, context.key_context.mode));
 
     const spanEnd = context.time_span[1];
     const phraseEnding = context.phrase_boundaries.some((boundary) => Math.abs(boundary[1] - spanEnd) < 0.25);

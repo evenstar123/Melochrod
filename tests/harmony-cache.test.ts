@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import { HarmonyCache } from '../src/perf/harmony-cache.js';
-import { HarmonyEnginePipeline } from '../src/harmonizer/harmony-engine-pipeline.js';
-import { make_measure, make_note, make_score } from './helpers/sample-score.js';
 
 describe('HarmonyCache', () => {
   it('stores and retrieves values', () => {
@@ -39,26 +37,17 @@ describe('HarmonyCache', () => {
     expect(cache.get_llm_response(key)).toBeUndefined();
     vi.useRealTimers();
   });
-});
 
-describe('HarmonyEnginePipeline cache integration', () => {
-  it('reuses cached intermediate results on repeated runs', async () => {
-    const score1 = make_score([
-      make_measure(1, [make_note('C', 0), make_note('E', 1), make_note('G', 2), make_note('C', 3)]),
-      make_measure(2, [make_note('F', 0), make_note('A', 1), make_note('C', 2), make_note('G', 3)]),
-    ]);
-    const score2 = make_score([
-      make_measure(1, [make_note('C', 0), make_note('E', 1), make_note('G', 2), make_note('C', 3)]),
-      make_measure(2, [make_note('F', 0), make_note('A', 1), make_note('C', 2), make_note('G', 3)]),
-    ]);
-
+  it('tracks hit and miss statistics for cached lookups', () => {
     const cache = new HarmonyCache();
-    const pipeline = new HarmonyEnginePipeline({ cache });
-    await pipeline.run(score1, { difficulty: 'basic', style: 'hymn' });
-    await pipeline.run(score2, { difficulty: 'basic', style: 'hymn' });
+    const key = cache.generate_melody_cache_key({ melody: [60, 62, 64] });
 
-    const stats = pipeline.get_cache_stats();
+    expect(cache.get_melody_result(key)).toBeUndefined();
+    cache.set_melody_result(key, { value: 42 });
+    expect(cache.get_melody_result<{ value: number }>(key)?.value).toBe(42);
+
+    const stats = cache.get_stats();
+    expect(stats.result.misses).toBeGreaterThan(0);
     expect(stats.result.hits).toBeGreaterThan(0);
   });
 });
-

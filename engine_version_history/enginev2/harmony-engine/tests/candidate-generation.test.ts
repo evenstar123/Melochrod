@@ -1,6 +1,7 @@
 ﻿import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { CandidateLatticeGenerator } from '../src/candidate/candidate-lattice-generator.js';
+import { candidate_from_roman } from '../src/candidate/candidate-utils.js';
 import { ModelRouter } from '../src/candidate/model-router.js';
 import { RuleRouter } from '../src/candidate/rule-router.js';
 import { RetrievalRouter } from '../src/candidate/retrieval-router.js';
@@ -34,6 +35,52 @@ describe('candidate routers', () => {
     expect(candidates.length).toBeGreaterThan(0);
     expect(candidates.every((candidate) => candidate.source === 'rule')).toBe(true);
     expect(candidates.some((candidate) => candidate.roman_numeral === 'I')).toBe(true);
+  });
+
+  it('RuleRouter uses minor-key candidate templates in minor mode', () => {
+    const score = make_score([
+      make_measure(1, [
+        make_note('C', 0),
+        make_note('E', 1, { accidental: 'flat' }),
+        make_note('G', 2),
+        make_note('A', 3, { accidental: 'flat' }),
+      ]),
+    ], { tonic: 'C', tonicAccidental: 'none', mode: 'minor', fifths: -3 });
+
+    const router = new RuleRouter();
+    const candidates = router.generate({
+      score,
+      time_span: [0, 4],
+      span_index: 0,
+      key_context: { key: 'C', mode: 'minor', confidence: 0.9, start_time: 0, end_time: 4 },
+      difficulty: 'basic',
+      style: 'hymn',
+      phrase_boundaries: [[0, 4]],
+      functional_state: 'tonic',
+    });
+
+    const romans = new Set(candidates.map((candidate) => candidate.roman_numeral));
+    expect(romans.has('i')).toBe(true);
+    expect(romans.has('iv')).toBe(true);
+    expect(romans.has('VI')).toBe(true);
+    expect(romans.has('I')).toBe(false);
+    expect(romans.has('IV')).toBe(false);
+  });
+
+  it('candidate_from_roman prefers flat spellings for flat-side minor keys', () => {
+    const candidate = candidate_from_roman({
+      roman_numeral: 'VI',
+      tonic: 'C',
+      tonic_accidental: 'none',
+      mode: 'minor',
+      difficulty: 'basic',
+      source: 'rule',
+    });
+
+    expect(candidate).not.toBeNull();
+    expect(candidate?.root).toBe('A');
+    expect(candidate?.root_accidental).toBe('flat');
+    expect(candidate?.quality).toBe('major');
   });
 
   it('RetrievalRouter converts retrieval hits into candidates', async () => {

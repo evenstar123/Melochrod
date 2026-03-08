@@ -39,6 +39,36 @@ function is_phrase_ending(phraseBoundaries: TimeSpan[], span: TimeSpan): boolean
   return phraseBoundaries.some((boundary) => Math.abs(boundary[1] - span[1]) < 0.25);
 }
 
+function is_phrase_start(phraseBoundaries: TimeSpan[], span: TimeSpan): boolean {
+  return phraseBoundaries.some((boundary) => Math.abs(boundary[0] - span[0]) < 0.25);
+}
+
+function is_primary_tonic(candidate: ChordCandidate): boolean {
+  return candidate.roman_numeral === 'I' || candidate.roman_numeral === 'i';
+}
+
+function opening_anchor(candidate: ChordCandidate): number {
+  if (is_primary_tonic(candidate)) return 1;
+  if (candidate.function === 'tonic') return 0.55;
+  if (candidate.function === 'dominant') return 0.25;
+  return 0;
+}
+
+function initial_tonic_bonus(candidate: ChordCandidate): number {
+  if (is_primary_tonic(candidate)) return 0.35;
+  if (candidate.function === 'tonic') return 0.08;
+  if (candidate.function === 'dominant') return -0.03;
+  return -0.12;
+}
+
+function cadence_anchor(candidate: ChordCandidate, finalEnding: boolean): number {
+  if (is_primary_tonic(candidate)) return finalEnding ? 1 : 0.95;
+  if (candidate.roman_numeral === 'V' || candidate.roman_numeral === 'V7') return finalEnding ? 0.65 : 0.85;
+  if (candidate.function === 'tonic') return finalEnding ? 0.15 : 0.45;
+  if (candidate.function === 'dominant') return finalEnding ? 0.3 : 0.65;
+  return 0;
+}
+
 export class GlobalDecoder {
   private readonly algorithm: 'viterbi' | 'beam';
   private readonly beam_width: number;
@@ -78,18 +108,25 @@ export class GlobalDecoder {
 
     const melodyCoverage = candidate.melody_coverage;
     const beatAlignment = candidate.beat_alignment;
+    const phraseStart = is_phrase_start(context.phrase_boundaries, lattice.time_spans[spanIndex]);
+    const phraseEnding = is_phrase_ending(context.phrase_boundaries, lattice.time_spans[spanIndex]);
+    const finalEnding = phraseEnding && spanIndex === lattice.time_spans.length - 1;
     const repeatExpectation = context.repeat_expectations?.[spanIndex];
     const repeatConsistency = repeatExpectation
       ? (candidate.roman_numeral === repeatExpectation.roman_numeral ? repeatExpectation.weight : -repeatExpectation.weight * 0.5)
       : 0;
+    const openingStability = phraseStart ? opening_anchor(candidate) : 0.5;
+    const cadenceStability = phraseEnding ? cadence_anchor(candidate, finalEnding) : 0.5;
 
-    // 0.4 + 0.2 + 0.2 + 0.1 + 0.1
+    // 0.32 + 0.16 + 0.16 + 0.08 + 0.08 + phrase anchors
     return (
-      0.4 * melodyCoverage +
-      0.2 * keyMatch +
-      0.2 * beatAlignment +
-      0.1 * difficultyMatch +
-      0.1 * styleMatch +
+      0.32 * melodyCoverage +
+      0.16 * keyMatch +
+      0.16 * beatAlignment +
+      0.08 * difficultyMatch +
+      0.08 * styleMatch +
+      0.1 * openingStability +
+      0.1 * cadenceStability +
       0.05 * (difficultyWeights.function_fit ?? 0) +
       0.1 * repeatConsistency
     );
@@ -144,7 +181,7 @@ export class GlobalDecoder {
 
     const firstCandidates = lattice.get_candidates(0);
     for (let i = 0; i < firstCandidates.length; i++) {
-      dp[0][i] = this._compute_local_score(firstCandidates[i], 0, lattice, context);
+      dp[0][i] = this._compute_local_score(firstCandidates[i], 0, lattice, context) + initial_tonic_bonus(firstCandidates[i]);
     }
 
     for (let spanIndex = 1; spanIndex < spans; spanIndex++) {

@@ -1,16 +1,18 @@
-# MeloChord
+# MeloChord Harmony Engine
 
-自动和声分析引擎 — 上传旋律，自动配和弦，生成领谱（Lead Sheet）。
+当前生产基线是 `v1` 管线：
 
-基于 RAG（检索增强生成）+ LLM 的智能和声分析平台，辅助音乐老师即兴伴奏、编曲学习者理解和声进行。
+- `MusicXML -> 解析 -> 调性分析 -> 旋律特征 -> RAG -> LLM -> 难度过滤 -> 验证 -> 回写 MusicXML`
+- 服务端保留了现有 Web / App / 小程序依赖的 API 形状与流式进度接口
+- `v2` 架构代码、测试和设计规格已归档到 [`engine_version_history/enginev2`](./engine_version_history/enginev2)
 
-## 功能
+## 当前状态
 
-- 上传 MusicXML 或乐谱图片/PDF，自动生成和弦标注
-- 五线谱（OSMD）和简谱双视图渲染
-- 三级难度：基础 / 进阶 / 高级
-- ABC Notation 导出
-- OMR 光学乐谱识别（Audiveris）
+- 生产入口：`server/index.ts`
+- 主引擎：`src/harmonizer/harmonize-pipeline.ts`
+- 健康检查：`GET /api/health`，返回 `engine: "v1"`
+- 和声接口：`POST /api/harmonize`
+- OMR 一站式接口：`POST /api/omr/harmonize`
 
 ## 快速开始
 
@@ -18,35 +20,41 @@
 npm install
 ```
 
-在项目根目录创建 `.env.local`：
+在 `harmony-engine/.env.local` 中配置：
 
-```
+```env
 DASHSCOPE_API_KEY=your_api_key_here
+AUDIVERIS_PATH=optional
 ```
 
-启动服务器：
+启动开发服务器：
 
 ```bash
 npm run dev
 ```
 
-访问 http://localhost:4000
+访问 `http://localhost:4000`
 
 ## 数据文件
 
-以下大文件不在 git 中，需要单独准备：
+以下文件通常不进仓库，需要单独准备：
 
-- `data/phrase_embeddings.bin` — 预计算的 embedding 向量（二进制）
-- `data/phrase_meta.json` — 片段元数据
-- `data/phrase_embeddings.json` — 原始 embedding JSON（可选）
+- `data/hooktheory_phrases.json`
+- `data/phrase_meta.json`
+- `data/phrase_embeddings.bin`
 
-运行预计算脚本生成：
+如果需要重新生成 embedding：
 
 ```bash
 npx tsx scripts/precompute-embeddings.ts
 npx tsx scripts/convert-embeddings-to-bin.ts
 ```
 
-## 技术栈
+## 架构说明
 
-TypeScript / Node.js / Express / DashScope (Qwen + text-embedding-v4) / Audiveris / OSMD
+`v1` 是当前唯一生产路线。原因不是“兼容保留”，而是它在真实编配效果上显著优于 `v2`。
+
+`v2` 已退出主链路。相关复盘见：
+
+- [`doc/v2引擎研发失败.md`](./doc/v2引擎研发失败.md)
+- [`engine_version_history/enginev2/README.md`](./engine_version_history/enginev2/README.md)

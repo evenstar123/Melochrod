@@ -5,6 +5,7 @@ import { HarmonyEnginePipeline } from '../src/harmonizer/harmony-engine-pipeline
 
 describe('HarmonyEnginePipeline integration', () => {
   const twinkleXml = readFileSync(resolve(process.cwd(), 'tests/fixtures/twinkle.xml'), 'utf-8');
+  const step1Xml = readFileSync(resolve(process.cwd(), '../melochord-miniprogram/test_data/step1.xml'), 'utf-8');
 
   it('runs end-to-end from sample MusicXML and returns annotated MusicXML', async () => {
     const pipeline = new HarmonyEnginePipeline();
@@ -66,5 +67,30 @@ describe('HarmonyEnginePipeline integration', () => {
     expect(result.metadata.errors.length).toBeGreaterThan(0);
     expect(result.chord_sequence).toHaveLength(0);
   });
-});
 
+  it('prefers score key signatures over the unreliable key-sequence analyzer', async () => {
+    const pipeline = new HarmonyEnginePipeline();
+    const result = await pipeline.run_from_input(
+      { type: 'musicxml', content: step1Xml },
+      { difficulty: 'basic', style: 'hymn' },
+    );
+
+    expect(result.key_sequence.length).toBeGreaterThan(0);
+    expect(result.key_sequence[0].key).toBe('Eb');
+    expect(result.key_sequence[0].mode).toBe('major');
+
+    const renderedRoots = new Set(
+      result.score.measures.flatMap((measure) =>
+        measure.chords.map((chord) => `${chord.root}${chord.rootAccidental === 'flat' ? 'b' : chord.rootAccidental === 'sharp' ? '#' : ''}`),
+      ),
+    );
+    const renderedChords = result.score.measures.flatMap((measure) => measure.chords);
+
+    expect(renderedRoots.has('G#')).toBe(false);
+    expect(renderedRoots.has('Eb')).toBe(true);
+    expect(renderedChords[0]?.root).toBe('E');
+    expect(renderedChords[0]?.rootAccidental).toBe('flat');
+    expect(renderedChords[renderedChords.length - 1]?.root).toBe('E');
+    expect(renderedChords[renderedChords.length - 1]?.rootAccidental).toBe('flat');
+  });
+});
