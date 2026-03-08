@@ -9,6 +9,7 @@ import type { Score, ChordSymbol, NoteLetter, Accidental, ChordQuality } from '.
 import type { MelodyFeatures } from './melody-features.js';
 import type { RetrievalResult } from './rag-retriever.js';
 import { featuresToPromptDescription } from './melody-features.js';
+import type { HarmonyCache } from '../perf/harmony-cache.js';
 
 /** 和弦生成配置 */
 export interface HarmonizerConfig {
@@ -17,6 +18,7 @@ export interface HarmonizerConfig {
   model?: string;
   /** 难度级别 */
   difficulty?: 'basic' | 'intermediate' | 'advanced';
+  cache?: HarmonyCache;
 }
 
 /** 单个小节的和弦生成结果 */
@@ -274,6 +276,7 @@ export class LLMHarmonizer {
   private client: OpenAI;
   private model: string;
   private difficulty: string;
+  private cache?: HarmonyCache;
 
   constructor(config: HarmonizerConfig) {
     this.client = new OpenAI({
@@ -282,6 +285,7 @@ export class LLMHarmonizer {
     });
     this.model = config.model ?? 'qwen-plus';
     this.difficulty = config.difficulty ?? 'basic';
+    this.cache = config.cache;
   }
 
   /**
@@ -302,6 +306,14 @@ export class LLMHarmonizer {
 
     const systemPrompt = buildSystemPrompt(this.difficulty);
     const userPrompt = buildUserPrompt(features, measureStart, measureEnd, annotatedResults, previousChords);
+    const promptCacheKey = this.cache?.generate_prompt_cache_key(`${this.model}\n${systemPrompt}\n${userPrompt}`);
+
+    if (promptCacheKey) {
+      const cached = this.cache?.get_llm_response<MeasureChords[]>(promptCacheKey);
+      if (cached) {
+        return cached;
+      }
+    }
 
     const response = await this.client.chat.completions.create({
       model: this.model,
@@ -313,7 +325,11 @@ export class LLMHarmonizer {
     });
 
     const content = response.choices[0]?.message?.content ?? '';
-    return parseLLMOutput(content);
+    const parsed = parseLLMOutput(content);
+    if (promptCacheKey) {
+      this.cache?.set_llm_response(promptCacheKey, parsed);
+    }
+    return parsed;
   }
 
   /**

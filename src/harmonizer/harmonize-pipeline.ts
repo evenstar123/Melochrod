@@ -12,6 +12,7 @@ import { RAGRetriever } from './rag-retriever.js';
 import { LLMHarmonizer, type AnnotatedRAGResult } from './llm-harmonizer.js';
 import { loadTransitionMatrix, validateHarmonization, type ValidationAnomaly } from './chord-validator.js';
 import { filterMeasureChords } from './difficulty-filter.js';
+import { HarmonyCache, type HarmonyCacheConfig } from '../perf/harmony-cache.js';
 
 export type { ValidationAnomaly };
 
@@ -35,6 +36,9 @@ export interface PipelineConfig {
   transitionThreshold?: number;
   /** 是否启用后处理验证 */
   enableValidation?: boolean;
+  cache?: HarmonyCache;
+  cacheConfig?: HarmonyCacheConfig;
+  logCacheStats?: boolean;
 }
 
 /** 管线执行结果 */
@@ -67,6 +71,7 @@ export interface PipelineResult {
       chunks: Array<{ startMeasure: number; endMeasure: number; ragMs: number; llmMs: number; filterMs: number; totalMs: number }>;
       validationMs?: number;
     };
+    cacheStats?: ReturnType<HarmonyCache['get_stats']>;
   };
   /** 验证统计 */
   validation?: {
@@ -88,15 +93,18 @@ export class HarmonizePipeline {
   private harmonizer: LLMHarmonizer;
   private config: PipelineConfig;
   private transitionMatrix?: Record<string, Record<string, number>>;
+  private readonly cache: HarmonyCache;
 
   constructor(config: PipelineConfig) {
     this.config = config;
+    this.cache = config.cache ?? new HarmonyCache(config.cacheConfig);
 
     // 初始化 LLM
     this.harmonizer = new LLMHarmonizer({
       apiKey: config.apiKey,
       model: config.model,
       difficulty: config.difficulty,
+      cache: this.cache,
     });
 
     // 初始化 RAG（可选）
@@ -104,6 +112,7 @@ export class HarmonizePipeline {
       this.retriever = new RAGRetriever({
         apiKey: config.apiKey,
         topK: config.topK ?? 5,
+        cache: this.cache,
       });
       this.retriever.loadPhrases(config.phrasesPath);
     }
@@ -264,8 +273,12 @@ export class HarmonizePipeline {
           featureExtractionMs,
           chunks: chunkTimings,
         },
+        cacheStats: this.cache.get_stats(),
       },
     };
+    if (this.config.logCacheStats) {
+      console.log(`[Pipeline] cache stats: ${JSON.stringify(result.stats.cacheStats)}`);
+    }
 
     // 验证统计
     if (this.config.enableValidation !== false && this.transitionMatrix) {
@@ -405,8 +418,12 @@ export class HarmonizePipeline {
           featureExtractionMs: 0,
           chunks: [],
         },
+        cacheStats: this.cache.get_stats(),
       },
     };
+    if (this.config.logCacheStats) {
+      console.log(`[Pipeline] cache stats: ${JSON.stringify(result.stats.cacheStats)}`);
+    }
 
     // 验证统计
     if (this.config.enableValidation !== false && this.transitionMatrix) {

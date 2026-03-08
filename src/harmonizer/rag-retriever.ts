@@ -11,6 +11,8 @@
 
 import OpenAI from 'openai';
 import { readFileSync, existsSync } from 'fs';
+import type { HarmonyCache } from '../perf/harmony-cache.js';
+import { ModeUnificationConfig } from './mode-unification-config.js';
 
 /** 片段数据结构（与 hooktheory_phrases.json 对齐） */
 export interface PhraseEntry {
@@ -38,6 +40,7 @@ interface RAGConfig {
   embeddingCachePath?: string;
   /** 检索时返回的最大结果数 */
   topK?: number;
+  cache?: HarmonyCache;
 }
 
 /**
@@ -87,6 +90,8 @@ export class RAGRetriever {
   private topK: number;
   private initialized = false;
   private dataDir = '';
+  private cache?: HarmonyCache;
+  private readonly mode_config = new ModeUnificationConfig();
 
   /**
    * 加载策略：
@@ -110,6 +115,7 @@ export class RAGRetriever {
       baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     });
     this.topK = config.topK ?? 5;
+    this.cache = config.cache;
   }
 
   /**
@@ -258,11 +264,23 @@ export class RAGRetriever {
    * 调用 text-embedding-v4 获取嵌入向量
    */
   async getEmbedding(text: string): Promise<number[]> {
+    const cacheKey = this.cache?.generate_embedding_cache_key(text);
+    if (cacheKey) {
+      const cached = this.cache?.get_query_embedding(cacheKey);
+      if (cached) {
+        return cached;
+      }
+    }
+
     const response = await this.client.embeddings.create({
       model: 'text-embedding-v4',
       input: text,
     });
-    return response.data[0].embedding;
+    const embedding = response.data[0].embedding;
+    if (cacheKey) {
+      this.cache?.set_query_embedding(cacheKey, embedding);
+    }
+    return embedding;
   }
 
   /**
@@ -294,10 +312,24 @@ export class RAGRetriever {
       throw new Error('RAGRetriever not initialized. Call loadPhrases() first.');
     }
 
-    if (this.loadStrategy === 'sharded') {
-      return this.retrieveSharded(query, mode);
+    const normalizedMode = this.mode_config.map_to_supported_mode(mode);
+    const ragCacheKey = this.cache?.generate_rag_cache_key(query, normalizedMode, this.topK);
+    if (ragCacheKey) {
+      const cached = this.cache?.get_rag_result<RetrievalResult[]>(ragCacheKey);
+      if (cached) {
+        return cached;
+      }
     }
-    return this.retrieveMonolith(query, mode);
+
+    const results = this.loadStrategy === 'sharded'
+      ? await this.retrieveSharded(query, normalizedMode)
+      : await this.retrieveMonolith(query, normalizedMode);
+
+    if (ragCacheKey) {
+      this.cache?.set_rag_result(ragCacheKey, results);
+    }
+
+    return results;
   }
 
   /**

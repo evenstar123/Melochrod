@@ -1,66 +1,94 @@
-/**
- * 核心数据类型 - 内部音乐表示 (IR)
+﻿/**
+ * 鏍稿績鏁版嵁绫诲瀷 - 鍐呴儴闊充箰琛ㄧず (IR)
  *
- * 设计原则：
- * 1. 保留音名语义（区分 C# 和 Db）
- * 2. 能从 MusicXML 无损转入
- * 3. 能轻松转为 ABC Notation
- * 4. 包含和声分析所需的全部信息
+ * 璁捐鍘熷垯锛?
+ * 1. 淇濈暀闊冲悕璇箟锛堝尯鍒?C# 鍜?Db锛?
+ * 2. 鑳戒粠 MusicXML 鏃犳崯杞叆
+ * 3. 鑳借交鏉捐浆涓?ABC Notation
+ * 4. 鍖呭惈鍜屽０鍒嗘瀽鎵€闇€鐨勫叏閮ㄤ俊鎭?
  */
 
-// ============ 基础音高类型 ============
+// ============ 鍩虹闊抽珮绫诲瀷 ============
 
-/** 音名（不含升降号） */
+/** 闊冲悕锛堜笉鍚崌闄嶅彿锛?*/
 export type NoteLetter = 'C' | 'D' | 'E' | 'F' | 'G' | 'A' | 'B';
 
-/** 变音记号 */
+/** 鍙橀煶璁板彿 */
 export type Accidental = 'sharp' | 'flat' | 'natural' | 'double-sharp' | 'double-flat' | 'none';
 
 /**
- * 音高 - 完整描述一个音的高度
- * 使用音名+变音记号+八度，而非 MIDI 编号
- * 这样 C# 和 Db 是不同的对象
+ * 闊抽珮 - 瀹屾暣鎻忚堪涓€涓煶鐨勯珮搴?
+ * 浣跨敤闊冲悕+鍙橀煶璁板彿+鍏害锛岃€岄潪 MIDI 缂栧彿
+ * 杩欐牱 C# 鍜?Db 鏄笉鍚岀殑瀵硅薄
  */
 export interface Pitch {
-  /** 音名 */
+  /** 闊冲悕 */
   step: NoteLetter;
-  /** 变音记号 */
+  /** 鍙橀煶璁板彿 */
   accidental: Accidental;
-  /** 八度（国际标准，中央C = C4） */
+  /** 鍏害锛堝浗闄呮爣鍑嗭紝涓ぎC = C4锛?*/
   octave: number;
 }
 
-// ============ 节奏类型 ============
+// ============ 鑺傚绫诲瀷 ============
 
-/** 音符时值类型 */
+/** 闊崇鏃跺€肩被鍨?*/
 export type DurationType =
-  | 'whole'     // 全音符
-  | 'half'      // 二分音符
-  | 'quarter'   // 四分音符
-  | 'eighth'    // 八分音符
-  | '16th'      // 十六分音符
-  | '32nd';     // 三十二分音符
+  | 'whole'     // 鍏ㄩ煶绗?
+  | 'half'      // 浜屽垎闊崇
+  | 'quarter'   // 鍥涘垎闊崇
+  | 'eighth'    // 鍏垎闊崇
+  | '16th'      // 鍗佸叚鍒嗛煶绗?
+  | '32nd';     // 涓夊崄浜屽垎闊崇
 
-// ============ 音符与休止符 ============
+// ============ 闊崇涓庝紤姝㈢ ============
 
-/** 音符 */
+/** 闊崇 */
 export interface Note {
   type: 'note';
-  /** 音高 */
+  /** 闊抽珮 */
   pitch: Pitch;
-  /** 时值类型 */
+  /** 鏃跺€肩被鍨?*/
   duration: DurationType;
-  /** 附点数量（0=无附点，1=单附点，2=双附点） */
+  /** 闄勭偣鏁伴噺锛?=鏃犻檮鐐癸紝1=鍗曢檮鐐癸紝2=鍙岄檮鐐癸級 */
   dots: number;
-  /** 是否为连音线的起始 */
+  /** 鏄惁涓鸿繛闊崇嚎鐨勮捣濮?*/
   tieStart: boolean;
-  /** 是否为连音线的结束 */
+  /** 鏄惁涓鸿繛闊崇嚎鐨勭粨鏉?*/
   tieStop: boolean;
-  /** 在小节内的起始拍位置（从0开始，以四分音符为单位） */
+  /** 鍦ㄥ皬鑺傚唴鐨勮捣濮嬫媿浣嶇疆锛堜粠0寮€濮嬶紝浠ュ洓鍒嗛煶绗︿负鍗曚綅锛?*/
   beat: number;
+  /** Salience feature: whether note starts on downbeat. */
+  is_downbeat?: boolean;
+  /** Salience feature: whether note starts on a strong beat. */
+  is_strong_beat?: boolean;
+  /** Salience feature: metric weight of beat strength. */
+  beat_weight?: number;
+  /** Salience feature: duration-based weight. */
+  duration_weight?: number;
+  /** Salience feature: blended salience score in [0, 1]. */
+  salience?: number;
+  /** Non-chord-tone type if detected (passing, neighbor, appoggiatura...). */
+  nct_type?: string;
+  /** Chord-tone tendency score in [0, 1]. */
+  chord_tone_tendency?: number;
+  /** Phrase boundary marker for this note position. */
+  phrase_boundary?: boolean;
+  /** Optional note confidence from upstream recognizer (OMR). */
+  confidence?: number;
+  /** Optional voice id from MusicXML <voice>. */
+  voice?: number;
+  /** Optional marker for grace notes. */
+  is_grace?: boolean;
+  /** Optional tuplet ratio (normal_notes / actual_notes). */
+  tuplet_ratio?: number;
+  /** Optional tie status from parser. */
+  tie_type?: 'none' | 'start' | 'continue' | 'stop';
+  /** Optional merged duration in quarter-note units after tie processing. */
+  merged_duration_quarters?: number;
 }
 
-/** 休止符 */
+/** 浼戞绗?*/
 export interface Rest {
   type: 'rest';
   duration: DurationType;
@@ -68,100 +96,101 @@ export interface Rest {
   beat: number;
 }
 
-/** 音乐事件（音符或休止符） */
+/** 闊充箰浜嬩欢锛堥煶绗︽垨浼戞绗︼級 */
 export type MusicEvent = Note | Rest;
 
-// ============ 和弦标记 ============
+// ============ 鍜屽鸡鏍囪 ============
 
-/** 和弦质量 */
+/** 鍜屽鸡璐ㄩ噺 */
 export type ChordQuality =
-  | 'major'       // 大三和弦
-  | 'minor'       // 小三和弦
-  | 'diminished'  // 减三和弦
-  | 'augmented'   // 增三和弦
-  | 'dominant7'   // 属七和弦
-  | 'major7'      // 大七和弦
-  | 'minor7'      // 小七和弦
-  | 'diminished7' // 减七和弦
-  | 'half-dim7'   // 半减七和弦
-  | 'sus2'        // 挂二和弦
-  | 'sus4';       // 挂四和弦
+  | 'major'       // 澶т笁鍜屽鸡
+  | 'minor'       // 灏忎笁鍜屽鸡
+  | 'diminished'  // 鍑忎笁鍜屽鸡
+  | 'augmented'   // 澧炰笁鍜屽鸡
+  | 'dominant7'   // 灞炰竷鍜屽鸡
+  | 'major7'      // 澶т竷鍜屽鸡
+  | 'minor7'      // 灏忎竷鍜屽鸡
+  | 'diminished7' // 鍑忎竷鍜屽鸡
+  | 'half-dim7'   // 鍗婂噺涓冨拰寮?
+  | 'sus2'        // 鎸備簩鍜屽鸡
+  | 'sus4';       // 鎸傚洓鍜屽鸡
 
 /**
- * 和弦符号 - 标注在乐谱上方的和弦
- * 例如：C, Am, G7, Bdim
+ * 鍜屽鸡绗﹀彿 - 鏍囨敞鍦ㄤ箰璋变笂鏂圭殑鍜屽鸡
+ * 渚嬪锛欳, Am, G7, Bdim
  */
 export interface ChordSymbol {
-  /** 根音音名 */
+  /** 鏍归煶闊冲悕 */
   root: NoteLetter;
-  /** 根音变音记号 */
+  /** 鏍归煶鍙橀煶璁板彿 */
   rootAccidental: Accidental;
-  /** 和弦质量 */
+  /** 鍜屽鸡璐ㄩ噺 */
   quality: ChordQuality;
-  /** 在小节内的拍位置 */
+  /** 鍦ㄥ皬鑺傚唴鐨勬媿浣嶇疆 */
   beat: number;
 }
 
-// ============ 调性 ============
+// ============ 璋冩€?============
 
-/** 调式 */
+/** 璋冨紡 */
 export type Mode = 'major' | 'minor';
 
-/** 调性信息 */
+/** 璋冩€т俊鎭?*/
 export interface KeySignature {
-  /** 主音 */
+  /** 涓婚煶 */
   tonic: NoteLetter;
-  /** 主音变音记号 */
+  /** 涓婚煶鍙橀煶璁板彿 */
   tonicAccidental: Accidental;
-  /** 调式 */
+  /** 璋冨紡 */
   mode: Mode;
-  /** MusicXML 中的 fifths 值（-7到7，负数为降号调，正数为升号调） */
+  /** MusicXML 涓殑 fifths 鍊硷紙-7鍒?锛岃礋鏁颁负闄嶅彿璋冿紝姝ｆ暟涓哄崌鍙疯皟锛?*/
   fifths: number;
 }
 
-// ============ 拍号 ============
+// ============ 鎷嶅彿 ============
 
-/** 拍号 */
+/** 鎷嶅彿 */
 export interface TimeSignature {
-  /** 每小节拍数 */
+  /** 姣忓皬鑺傛媿鏁?*/
   beats: number;
-  /** 以什么音符为一拍 */
+  /** 浠ヤ粈涔堥煶绗︿负涓€鎷?*/
   beatType: number;
 }
 
-// ============ 小节与乐谱 ============
+// ============ 灏忚妭涓庝箰璋?============
 
-/** 小节 */
+/** 灏忚妭 */
 export interface Measure {
-  /** 小节编号（从1开始） */
+  /** 灏忚妭缂栧彿锛堜粠1寮€濮嬶級 */
   number: number;
-  /** 该小节的音乐事件 */
+  /** 璇ュ皬鑺傜殑闊充箰浜嬩欢 */
   events: MusicEvent[];
-  /** 该小节的和弦标注（由 Harmonizer 填充） */
+  /** 璇ュ皬鑺傜殑鍜屽鸡鏍囨敞锛堢敱 Harmonizer 濉厖锛?*/
   chords: ChordSymbol[];
-  /** 如果该小节有调性变化，记录新调性 */
+  /** 濡傛灉璇ュ皬鑺傛湁璋冩€у彉鍖栵紝璁板綍鏂拌皟鎬?*/
   keyChange?: KeySignature;
-  /** 如果该小节有拍号变化，记录新拍号 */
+  /** 濡傛灉璇ュ皬鑺傛湁鎷嶅彿鍙樺寲锛岃褰曟柊鎷嶅彿 */
   timeChange?: TimeSignature;
 }
 
 /**
- * Score - 完整乐谱的内部表示
- * 这是整个系统的核心数据结构
+ * Score - 瀹屾暣涔愯氨鐨勫唴閮ㄨ〃绀?
+ * 杩欐槸鏁翠釜绯荤粺鐨勬牳蹇冩暟鎹粨鏋?
  */
 export interface Score {
-  /** 曲名 */
+  /** 鏇插悕 */
   title: string;
-  /** 作曲者 */
+  /** 浣滄洸鑰?*/
   composer: string;
-  /** 初始调性 */
+  /** 鍒濆璋冩€?*/
   key: KeySignature;
-  /** 调号是否来自 MusicXML 的显式声明（而非默认值） */
+  /** 璋冨彿鏄惁鏉ヨ嚜 MusicXML 鐨勬樉寮忓０鏄庯紙鑰岄潪榛樿鍊硷級 */
   keyExplicit?: boolean;
-  /** 初始拍号 */
+  /** 鍒濆鎷嶅彿 */
   time: TimeSignature;
-  /** 速度（BPM，四分音符/分钟） */
+  /** 閫熷害锛圔PM锛屽洓鍒嗛煶绗?鍒嗛挓锛?*/
   tempo: number;
-  /** 所有小节 */
+  /** 鎵€鏈夊皬鑺?*/
   measures: Measure[];
 }
+
